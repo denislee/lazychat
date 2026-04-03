@@ -160,21 +160,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForStream(ch)
 
 	case tokenMsg:
-		// Update active conversation with streamed tokens
-		if m.activeConv != nil && len(m.activeConv.Messages) > 0 {
-			last := len(m.activeConv.Messages) - 1
-			m.activeConv.Messages[last].Content += string(msg)
+		// Let chat.Update() handle token appending; just forward to it
+		var cmd tea.Cmd
+		m.chat, cmd = m.chat.Update(msg)
+		if m.activeConv != nil {
+			m.activeConv.Messages = m.chat.messages
 		}
+		return m, cmd
 
 	case streamDoneMsg:
+		m.chat, _ = m.chat.Update(msg)
 		if m.activeConv != nil {
+			m.activeConv.Messages = m.chat.messages
 			m.store.Save(*m.activeConv)
 		}
+		return m, nil
 
 	case streamErrMsg:
+		m.chat, _ = m.chat.Update(msg)
 		if m.activeConv != nil {
+			m.activeConv.Messages = m.chat.messages
 			m.store.Save(*m.activeConv)
 		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -184,7 +192,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.chat, cmd = m.chat.Update(msg)
 	cmds = append(cmds, cmd)
 
-	// Sync chat messages back to active conversation
 	if m.activeConv != nil {
 		m.activeConv.Messages = m.chat.messages
 	}

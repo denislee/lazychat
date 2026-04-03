@@ -82,5 +82,8 @@ func (s sidebar) View() string {
 		}
 	}
 
+	b.WriteString("\n\n")
+	b.WriteString(dimStyle.Render("[n]ew [d]el [q]uit"))
+
 	return b.String()
 }
