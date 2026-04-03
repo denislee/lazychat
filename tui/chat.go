@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"lazychat/conversation"
 	"lazychat/groq"
@@ -107,15 +108,17 @@ func (c chat) Update(msg tea.Msg) (chat, tea.Cmd) {
 
 func (c *chat) refreshViewport() {
 	var b strings.Builder
+	w := c.viewport.Width
+	wrapStyle := lipgloss.NewStyle().Width(w)
 	for _, msg := range c.messages {
+		var line string
 		switch msg.Role {
 		case "user":
-			b.WriteString(userStyle.Render("You: "))
-			b.WriteString(msg.Content)
+			line = userStyle.Render("You: ") + msg.Content
 		case "assistant":
-			b.WriteString(assistantStyle.Render("AI: "))
-			b.WriteString(msg.Content)
+			line = assistantStyle.Render("AI: ") + msg.Content
 		}
+		b.WriteString(wrapStyle.Render(line))
 		b.WriteString("\n\n")
 	}
 	if c.err != "" {
@@ -128,7 +131,7 @@ func (c *chat) refreshViewport() {
 func (c *chat) setSize(w, h int) {
 	c.width = w
 	c.height = h
-	c.viewport.Width = w
+	c.viewport.Width = w - 2
 	c.viewport.Height = h - 3
 	c.input.Width = w - 2
 }
