@@ -61,7 +61,7 @@ func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 			return s, nil
 		}
 		switch msg.String() {
-		case "up", "k":
+		case "up", "k", "ctrl+p":
 			if s.selected > 0 {
 				s.selected--
 				if s.selected < len(s.conversations) {
@@ -71,7 +71,7 @@ func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 					return s, func() tea.Msg { return previewUsageMsg{} }
 				}
 			}
-		case "down", "j":
+		case "down", "j", "ctrl+n":
 			if s.selected < maxIdx {
 				s.selected++
 				if s.selected < len(s.conversations) {
@@ -94,8 +94,6 @@ func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 				idx := s.selected
 				return s, func() tea.Msg { return selectConvInputMsg(idx) }
 			}
-		case "n":
-			return s, func() tea.Msg { return newConvMsg{} }
 		case "d":
 			if s.selected < len(s.conversations) && !s.isFixedMode(s.conversations[s.selected].Mode) {
 				s.confirmDelete = true
@@ -114,17 +112,9 @@ func (s sidebar) View() string {
 	if len(s.conversations) == 0 {
 		b.WriteString(dimStyle.Render("No conversations yet"))
 		b.WriteString("\n")
-		b.WriteString(dimStyle.Render("Press 'n' to start"))
+		b.WriteString(dimStyle.Render("Press '^k' to start"))
 	} else {
-		prevMode := ""
 		for i, conv := range s.conversations {
-			// Add separator after fixed items
-			if s.isFixedMode(prevMode) && !s.isFixedMode(conv.Mode) {
-				b.WriteString(dimStyle.Render("  ───"))
-				b.WriteString("\n")
-			}
-			prevMode = conv.Mode
-
 			cursor := "  "
 			style := normalItemStyle
 			if i == s.selected {
@@ -160,8 +150,8 @@ func (s sidebar) View() string {
 	}
 	b.WriteString(style.Render(cursor + "Usage"))
 
-	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("[n]ew [d]el [m]odel [q]uit"))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("[d]el [m]odel [^k]mode [q]uit"))
 
 	return b.String()
 }

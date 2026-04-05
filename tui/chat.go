@@ -173,7 +173,7 @@ func (c chat) Update(msg tea.Msg) (chat, tea.Cmd) {
 						c.resizeInput()
 					}
 					return c, nil
-				case "down":
+				case "down", "ctrl+n":
 					if c.historyIdx != -1 {
 						if c.historyIdx < len(c.inputHistory)-1 {
 							c.historyIdx++
@@ -228,8 +228,6 @@ func (c chat) Update(msg tea.Msg) (chat, tea.Cmd) {
 					c.input.Focus()
 					c.resizeInput()
 					return c, nil
-				case "n":
-					return c, func() tea.Msg { return newConvMsg{} }
 				case "d":
 					if c.selectedMsg >= 0 && c.selectedMsg < len(c.messages) {
 						c.confirmDelete = true
@@ -482,11 +480,19 @@ func (c *chat) ensureVisible() {
 // resetInputHeight shrinks the input back to 1 line (used when blurring).
 func (c *chat) resetInputHeight() {
 	c.input.SetHeight(1)
-	c.viewport.Height = c.height - 3 // 1 line + 2 borders
+	if !c.inputFocused {
+		c.viewport.Height = c.height
+	} else {
+		c.viewport.Height = c.height - 3 // 1 line + 2 borders
+	}
 }
 
 // resizeInput adjusts the textarea height and viewport to fit the content.
 func (c *chat) resizeInput() {
+	if !c.inputFocused {
+		c.viewport.Height = c.height
+		return
+	}
 	lines := c.visualLineCount()
 	if lines > maxInputHeight {
 		lines = maxInputHeight
@@ -517,25 +523,19 @@ func (c *chat) setSize(w, h int) {
 }
 
 func (c chat) View() string {
-	inputInner := c.width - 4
-	frameFocused := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("170")).
-		Width(inputInner)
-	frameBlurred := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
-		Width(inputInner)
-
 	var bottom string
+	var bottomHeight int
+
 	if c.inputFocused {
+		inputInner := c.width - 4
+		frameFocused := lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("170")).
+			Width(inputInner)
 		bottom = frameFocused.Render(c.input.View())
-	} else {
-		content := dimStyle.Render("[i]nput [h]back [j/k]scroll [y]ank [l]view [d]el")
-		bottom = frameBlurred.Render(content)
+		bottomHeight = lipgloss.Height(bottom)
 	}
 
-	bottomHeight := lipgloss.Height(bottom)
 	vpHeight := c.height - bottomHeight
 	if vpHeight < 0 {
 		vpHeight = 0
@@ -543,5 +543,8 @@ func (c chat) View() string {
 	c.viewport.Height = vpHeight
 	vpView := c.viewport.View()
 
+	if !c.inputFocused {
+		return vpView
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, vpView, bottom)
 }

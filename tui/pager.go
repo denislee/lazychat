@@ -98,7 +98,7 @@ func (p pager) Update(msg tea.Msg) (pager, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "esc":
+		case "q", "esc", "h":
 			p.close()
 			return p, func() tea.Msg { return pagerCloseMsg{} }
 
@@ -301,7 +301,7 @@ func (p pager) View() string {
 	}
 
 	pos := fmt.Sprintf(" %d/%d ", p.cursor+1, len(p.lines))
-	help := " [j/k]move [v]isual [y]ank [q]uit "
+	help := " [j/k]move [v]isual [y]ank [h/q]back "
 
 	left := modeStyle.Render(mode)
 	right := lipgloss.NewStyle().

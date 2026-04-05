@@ -87,35 +87,8 @@ func NewModel(s *store.Store, providers ...provider.Provider) Model {
 	skills := cfg.Skills
 	skp := newSkillPicker(skills)
 
-	// Ensure fixed skill conversations exist
-	for _, skill := range skills {
-		found := false
-		for _, c := range convs {
-			if c.Mode == skill.Mode {
-				found = true
-				break
-			}
-		}
-		if !found {
-			tc := conversation.New(skill.Title)
-			tc.Mode = skill.Mode
-			s.Save(tc)
-			convs = append(convs, tc)
-		}
-	}
-
-	// Move fixed skills to front in order defined in config
-	var fixed, rest []conversation.Conversation
-	fixedModes := make(map[string]bool)
-	for _, skill := range skills {
-		fixedModes[skill.Mode] = true
-		for _, c := range convs {
-			if c.Mode == skill.Mode {
-				fixed = append(fixed, c)
-				break
-			}
-		}
-	}
+	// Filter to only include non-skill conversations in sidebar
+	var filtered []conversation.Conversation
 	for _, c := range convs {
 		isFixed := false
 		for _, skill := range skills {
@@ -125,12 +98,10 @@ func NewModel(s *store.Store, providers ...provider.Provider) Model {
 			}
 		}
 		if !isFixed {
-			rest = append(rest, c)
+			filtered = append(filtered, c)
 		}
 	}
-	convs = append(fixed, rest...)
-
-	sb.conversations = convs
+	sb.conversations = filtered
 	sb.skills = skills
 
 	active := providers[0]
@@ -173,12 +144,16 @@ func NewModel(s *store.Store, providers ...provider.Provider) Model {
 		store:       s,
 		providers:   providers,
 		active:      active,
-		focus:       focusChat,
+		focus:       focusSkillPicker,
 		skills:      skills,
 	}
 
-	// Start with the first skill conversation selected and input focused
-	if len(m.sidebar.conversations) > 0 && m.isFixedMode(m.sidebar.conversations[0].Mode) {
+	m.sidebar.focused = false
+	m.chat.focused = false
+	m.chat.inputFocused = false
+
+	// Start with the first conversation selected
+	if len(m.sidebar.conversations) > 0 {
 		m.sidebar.selected = 0
 		full, err := s.Load(m.sidebar.conversations[0].ID)
 		if err == nil {
@@ -189,11 +164,7 @@ func NewModel(s *store.Store, providers ...provider.Provider) Model {
 		m.activeConv = &m.sidebar.conversations[0]
 		m.chat.messages = m.activeConv.Messages
 		m.chat.selectedMsg = -1
-		m.chat.focused = true
-		m.chat.inputFocused = true
-		m.chat.input.Focus()
-		m.chat.resizeInput()
-		m.sidebar.focused = false
+		// Chat is already blurred by the initial focusSkillPicker settings above
 	}
 
 	return m
@@ -233,8 +204,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusToSidebar()
 				return m, nil
 			}
-		case "ctrl+n":
-			return m.Update(newConvMsg{})
 		case "ctrl+k":
 			if m.focus == focusSkillPicker {
 				m.focusToSidebar()
@@ -262,7 +231,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusToSidebar()
 				return m, nil
 			}
-			if m.focus == focusUsage || m.focus == focusModelPicker {
+			if m.focus == focusUsage || m.focus == focusModelPicker || m.focus == focusSkillPicker {
 				m.focusToSidebar()
 				return m, nil
 			}
@@ -434,7 +403,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		conv := conversation.New("[new chat]")
-		m.store.Save(conv)
 		// Insert after fixed skill conversations
 		insertIdx := m.fixedAfterIdx(m.sidebar.conversations)
 		m.sidebar.conversations = append(m.sidebar.conversations[:insertIdx],
@@ -471,14 +439,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case skillSelectedMsg:
-		// Find the conversation with this skill mode and select it
+		if msg.isNew {
+			return m.Update(newConvMsg{})
+		}
+
+		// Find the conversation with this skill mode and select it if in sidebar
 		for i, c := range m.sidebar.conversations {
 			if c.Mode == msg.skill.Mode {
 				m.sidebar.selected = i
 				return m.Update(selectConvInputMsg(i))
 			}
 		}
-		return m, nil
+
+		// Not in sidebar, load from store or create
+		all, _ := m.store.ListMeta()
+		var skillConv *conversation.Conversation
+		for i := range all {
+			if all[i].Mode == msg.skill.Mode {
+				all[i].Title = msg.skill.Title // Sync title with listing
+				skillConv = &all[i]
+				break
+			}
+		}
+
+		if skillConv == nil {
+			tc := conversation.New(msg.skill.Title)
+			tc.Mode = msg.skill.Mode
+			skillConv = &tc
+		}
+
+		// Load messages
+		full, _ := m.store.Load(skillConv.ID)
+		skillConv.Messages = full.Messages
+
+		// Add to sidebar at the top (or after other skills if we want)
+		m.sidebar.conversations = append([]conversation.Conversation{*skillConv}, m.sidebar.conversations...)
+		m.sidebar.selected = 0
+		return m.Update(selectConvInputMsg(0))
 
 	case selectUsageMsg:
 		m.syncActiveConv()
@@ -608,7 +605,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			tc := conversation.New(newSkill.Title)
 			tc.Mode = skillMode
-			m.store.Save(tc)
 
 			// Remove archived from its fixed position, insert new skill, then
 			// place archived after all fixed items to keep ordering clean.
@@ -649,7 +645,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !isSkill && len(m.activeConv.Messages) > 0 {
 			m.syncActiveConv()
 			conv := conversation.New("[new chat]")
-			m.store.Save(conv)
 			insertIdx := m.fixedAfterIdx(m.sidebar.conversations)
 			m.sidebar.conversations = append(m.sidebar.conversations[:insertIdx],
 				append([]conversation.Conversation{conv}, m.sidebar.conversations[insertIdx:]...)...)
@@ -681,6 +676,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		assistantMsg := conversation.Message{Role: "assistant", Content: "", Model: m.active.GetModel()}
 		m.activeConv.Messages = append(m.activeConv.Messages, assistantMsg)
+
+		m.store.Save(*m.activeConv)
 
 		m.chat.messages = m.activeConv.Messages
 		m.chat.streaming = true // set before refresh so "thinking..." shows immediately
@@ -813,8 +810,8 @@ func (m *Model) syncActiveConv() {
 	if m.activeConv == nil {
 		return
 	}
-	if m.chat.messages == nil {
-		return // messages never loaded, nothing to save
+	if len(m.chat.messages) == 0 {
+		return // nothing to save
 	}
 	m.activeConv.Messages = m.chat.messages
 	m.store.Save(*m.activeConv)

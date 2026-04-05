@@ -58,7 +58,6 @@ You can define custom "skills" that appear at the top of your conversation list.
 | Key | Action |
 |-----|--------|
 | `tab` | Toggle focus between Sidebar and Chat |
-| `ctrl+n` | Start a new chat (Global) |
 | `ctrl+k` | Open Skill Picker menu (Global) |
 | `m` | Open Model Picker menu |
 | `k` / `j` | Vim-style up/down navigation |
