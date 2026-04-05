@@ -2,11 +2,15 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+lazychat
+lazychat_bin
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+*.a
+*.o
 
 # Test binary, built with `go test -c`
 *.test
