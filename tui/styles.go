@@ -22,6 +22,19 @@ var (
 	assistantStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
 
+	modelNameStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("99"))
+
+	reasoningStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243")).
+			Italic(true)
+
+	reasoningLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("243")).
+				Italic(true)
+
 	dimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
 

@@ -2,12 +2,16 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbles/textinput"
+	"bytes"
+	"text/template"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"lazychat/conversation"
-	"lazychat/groq"
+	"lazychat/provider"
 	"lazychat/store"
 )
 
@@ -18,38 +22,185 @@ type focus int
 const (
 	focusSidebar focus = iota
 	focusChat
+	focusUsage
+	focusModelPicker
+	focusSkillPicker
+	focusPager
 )
 
-type Model struct {
-	sidebar    sidebar
-	chat       chat
-	store      *store.Store
-	groq       *groq.Client
-	focus      focus
-	width      int
-	height     int
-	activeConv *conversation.Conversation
-	ready      bool
+type usageResultMsg struct {
+	info provider.RateLimitInfo
+	err  error
 }
 
-func NewModel(s *store.Store, g *groq.Client) Model {
+type resizeMsg int
+
+type Model struct {
+	sidebar          sidebar
+	chat             chat
+	usage            usageView
+	modelPicker      modelPicker
+	skillPicker      skillPicker
+	pager            pager
+	statusbar        statusBar
+	store            *store.Store
+	providers        []provider.Provider
+	active           provider.Provider
+	focus            focus
+	width            int
+	height           int
+	activeConv       *conversation.Conversation
+	showUsagePreview bool
+	ready            bool
+	resizeSeq        int
+	skills           []store.Skill
+}
+
+func (m Model) isFixedMode(mode string) bool {
+	for _, s := range m.skills {
+		if s.Mode == mode {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) fixedAfterIdx(convs []conversation.Conversation) int {
+	for i, c := range convs {
+		if !m.isFixedMode(c.Mode) {
+			return i
+		}
+	}
+	return len(convs)
+}
+
+func NewModel(s *store.Store, providers ...provider.Provider) Model {
 	sb := newSidebar()
 	ch := newChat()
+	ch.inputHistory = s.LoadHistory()
+	uv := newUsageView()
+	mp := newModelPicker(providers)
 
-	convs, _ := s.List()
-	sb.conversations = convs
+	convs, _ := s.ListMeta()
 
-	return Model{
-		sidebar: sb,
-		chat:    ch,
-		store:   s,
-		groq:    g,
-		focus:   focusSidebar,
+	cfg, _ := s.LoadConfig()
+	skills := cfg.Skills
+	skp := newSkillPicker(skills)
+
+	// Ensure fixed skill conversations exist
+	for _, skill := range skills {
+		found := false
+		for _, c := range convs {
+			if c.Mode == skill.Mode {
+				found = true
+				break
+			}
+		}
+		if !found {
+			tc := conversation.New(skill.Title)
+			tc.Mode = skill.Mode
+			s.Save(tc)
+			convs = append(convs, tc)
+		}
 	}
+
+	// Move fixed skills to front in order defined in config
+	var fixed, rest []conversation.Conversation
+	fixedModes := make(map[string]bool)
+	for _, skill := range skills {
+		fixedModes[skill.Mode] = true
+		for _, c := range convs {
+			if c.Mode == skill.Mode {
+				fixed = append(fixed, c)
+				break
+			}
+		}
+	}
+	for _, c := range convs {
+		isFixed := false
+		for _, skill := range skills {
+			if c.Mode == skill.Mode {
+				isFixed = true
+				break
+			}
+		}
+		if !isFixed {
+			rest = append(rest, c)
+		}
+	}
+	convs = append(fixed, rest...)
+
+	sb.conversations = convs
+	sb.skills = skills
+
+	active := providers[0]
+
+	// Restore last selected model from config
+	if cfg.Provider != "" {
+		for _, p := range providers {
+			if p.Name() == cfg.Provider {
+				p.SetModel(cfg.Model)
+				active = p
+				mp.current = modelEntry{provider: cfg.Provider, model: cfg.Model}
+				// Set picker cursor to the saved model
+				for i, e := range mp.entries {
+					if e.provider == cfg.Provider && e.model == cfg.Model {
+						mp.selected = i
+						break
+					}
+				}
+				break
+			}
+		}
+	}
+
+	sb2 := statusBar{
+		provider: active.Name(),
+		model:    active.GetModel(),
+	}
+
+	ch.activeModel = active.GetModel()
+	pg := newPager()
+
+	m := Model{
+		sidebar:     sb,
+		chat:        ch,
+		usage:       uv,
+		modelPicker: mp,
+		skillPicker: skp,
+		pager:       pg,
+		statusbar:   sb2,
+		store:       s,
+		providers:   providers,
+		active:      active,
+		focus:       focusChat,
+		skills:      skills,
+	}
+
+	// Start with the first skill conversation selected and input focused
+	if len(m.sidebar.conversations) > 0 && m.isFixedMode(m.sidebar.conversations[0].Mode) {
+		m.sidebar.selected = 0
+		full, err := s.Load(m.sidebar.conversations[0].ID)
+		if err == nil {
+			m.sidebar.conversations[0].Messages = full.Messages
+		} else {
+			m.sidebar.conversations[0].Messages = []conversation.Message{}
+		}
+		m.activeConv = &m.sidebar.conversations[0]
+		m.chat.messages = m.activeConv.Messages
+		m.chat.selectedMsg = -1
+		m.chat.focused = true
+		m.chat.inputFocused = true
+		m.chat.input.Focus()
+		m.chat.resizeInput()
+		m.sidebar.focused = false
+	}
+
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	return textinput.Blink
+	return textarea.Blink
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -61,46 +212,305 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 		m.updateSizes()
+		m.resizeSeq++
+		seq := m.resizeSeq
+		return m, tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+			return resizeMsg(seq)
+		})
+
+	case resizeMsg:
+		if int(msg) == m.resizeSeq {
+			m.chat.refreshViewport()
+		}
 		return m, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
+		case "esc":
+			if m.focus == focusModelPicker || m.focus == focusSkillPicker || m.focus == focusUsage {
+				m.focusToSidebar()
+				return m, nil
+			}
+		case "ctrl+n":
+			return m.Update(newConvMsg{})
+		case "ctrl+k":
+			if m.focus == focusSkillPicker {
+				m.focusToSidebar()
+				return m, nil
+			}
+			m.focus = focusSkillPicker
+			m.sidebar.focused = false
+			m.chat.focused = false
+			m.chat.inputFocused = false
+			m.chat.input.Blur()
+			return m, nil
 		case "tab":
-			if m.activeConv != nil {
-				m.toggleFocus()
+			if m.focus == focusUsage || m.focus == focusModelPicker || m.focus == focusSkillPicker || m.focus == focusPager {
+				m.focusToSidebar()
+			} else if m.activeConv != nil {
+				if m.focus == focusSidebar {
+					m.focusToChat()
+				} else {
+					m.focusToSidebar()
+				}
 			}
 			return m, nil
+		case "h":
+			if m.focus == focusChat && !m.chat.inputFocused {
+				m.focusToSidebar()
+				return m, nil
+			}
+			if m.focus == focusUsage || m.focus == focusModelPicker {
+				m.focusToSidebar()
+				return m, nil
+			}
+		case "m":
+			if m.focus == focusModelPicker {
+				m.focusToSidebar()
+				return m, nil
+			}
+			if m.focus == focusSidebar || (m.focus == focusChat && !m.chat.inputFocused) {
+				m.focus = focusModelPicker
+				m.sidebar.focused = false
+				m.chat.focused = false
+				m.chat.inputFocused = false
+				m.chat.input.Blur()
+				return m, nil
+			}
+		case "r":
+			if m.focus == focusUsage && !m.usage.loading {
+				m.usage.loading = true
+				m.usage.err = ""
+				m.statusbar.activity = netFetchingUsage
+				m.statusbar.spinnerFrame = 0
+				g := m.active
+				return m, tea.Batch(
+					func() tea.Msg {
+						info, err := g.FetchUsage()
+						return usageResultMsg{info: info, err: err}
+					},
+					spinnerTick(),
+				)
+			}
 		case "q":
-			if m.focus == focusSidebar {
+			if m.focus != focusPager && !(m.focus == focusChat && m.chat.inputFocused) {
 				return m, tea.Quit
 			}
 		}
 
+	case openPagerMsg:
+		rightWidth := m.width - sidebarWidth - 4
+		panelHeight := m.height - 3
+		m.pager.open(msg.content, rightWidth-2, panelHeight)
+		m.focus = focusPager
+		m.chat.focused = false
+		m.chat.inputFocused = false
+		m.chat.input.Blur()
+		m.sidebar.focused = false
+		return m, nil
+
+	case pagerCloseMsg:
+		m.focusToChat()
+		return m, nil
+
+	case clipboardMsg:
+		if msg.err != nil {
+			m.statusbar.flashMsg = "Copy failed: " + msg.err.Error()
+		} else {
+			m.statusbar.flashMsg = "Copied to clipboard!"
+		}
+		return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+			return clearStatusMsg{}
+		})
+
+	case clearStatusMsg:
+		m.statusbar.flashMsg = ""
+		return m, nil
+
+	case spinnerTickMsg:
+		if m.statusbar.activity != netIdle {
+			m.statusbar.spinnerFrame++
+			return m, spinnerTick()
+		}
+		return m, nil
+
+	case escEmptyChatMsg:
+		m.focusToSidebar()
+		return m, nil
+
+	case previewUsageMsg:
+		m.syncActiveConv()
+		m.activeConv = nil
+		m.usage.info = m.active.GetRateLimit()
+		m.usage.providerName = m.active.Name()
+		m.usage.model = m.active.GetModel()
+		m.showUsagePreview = true
+		return m, nil
+
+	case previewConvMsg:
+		idx := int(msg)
+		if idx >= 0 && idx < len(m.sidebar.conversations) {
+			m.syncActiveConv()
+			m.loadConvMessages(idx)
+			m.activeConv = &m.sidebar.conversations[idx]
+			m.chat.messages = m.activeConv.Messages
+			m.chat.err = ""
+			m.chat.selectedMsg = -1
+			m.chat.refreshViewport()
+			m.chat.viewport.GotoBottom()
+			m.showUsagePreview = false
+		}
+		return m, nil
+
+	case selectConvInputMsg:
+		idx := int(msg)
+		if idx >= 0 && idx < len(m.sidebar.conversations) {
+			m.syncActiveConv()
+			m.loadConvMessages(idx)
+			m.activeConv = &m.sidebar.conversations[idx]
+			m.chat.messages = m.activeConv.Messages
+			m.chat.err = ""
+			m.chat.selectedMsg = -1
+			m.chat.refreshViewport()
+			m.chat.viewport.GotoBottom()
+			m.showUsagePreview = false
+			m.focus = focusChat
+			m.sidebar.focused = false
+			m.chat.focused = true
+			m.chat.inputFocused = true
+			m.chat.input.Focus()
+			m.chat.resizeInput()
+		}
+		return m, nil
+
 	case selectConvMsg:
 		idx := int(msg)
 		if idx >= 0 && idx < len(m.sidebar.conversations) {
-			conv := m.sidebar.conversations[idx]
-			m.activeConv = &conv
-			m.chat.messages = conv.Messages
+			m.syncActiveConv()
+			m.loadConvMessages(idx)
+			m.activeConv = &m.sidebar.conversations[idx]
+			m.chat.messages = m.activeConv.Messages
 			m.chat.err = ""
+			m.showUsagePreview = false
+			if len(m.activeConv.Messages) == 0 {
+				m.chat.selectedMsg = -1
+				m.focus = focusChat
+				m.sidebar.focused = false
+				m.chat.focused = true
+				m.chat.inputFocused = true
+				m.chat.input.Focus()
+				m.chat.resizeInput()
+			} else {
+				m.chat.selectedMsg = len(m.activeConv.Messages) - 1
+				m.focusToChat()
+			}
 			m.chat.refreshViewport()
 			m.chat.viewport.GotoBottom()
-			m.toggleFocus()
 		}
 		return m, nil
 
 	case newConvMsg:
-		conv := conversation.New("New Chat")
+		// Reuse existing "[new chat]" if one exists
+		for i, c := range m.sidebar.conversations {
+			if c.Title == "[new chat]" && !m.isFixedMode(c.Mode) {
+				m.syncActiveConv()
+				m.loadConvMessages(i)
+				m.sidebar.selected = i
+				m.activeConv = &m.sidebar.conversations[i]
+				m.chat.messages = m.activeConv.Messages
+				m.chat.selectedMsg = -1
+				m.chat.err = ""
+				m.chat.refreshViewport()
+				m.showUsagePreview = false
+				m.focus = focusChat
+				m.sidebar.focused = false
+				m.chat.focused = true
+				m.chat.inputFocused = true
+				m.chat.input.Focus()
+				m.chat.resizeInput()
+				return m, nil
+			}
+		}
+		conv := conversation.New("[new chat]")
 		m.store.Save(conv)
-		m.sidebar.conversations = append([]conversation.Conversation{conv}, m.sidebar.conversations...)
-		m.sidebar.selected = 0
-		m.activeConv = &m.sidebar.conversations[0]
+		// Insert after fixed skill conversations
+		insertIdx := m.fixedAfterIdx(m.sidebar.conversations)
+		m.sidebar.conversations = append(m.sidebar.conversations[:insertIdx],
+			append([]conversation.Conversation{conv}, m.sidebar.conversations[insertIdx:]...)...)
+		m.sidebar.selected = insertIdx
+		m.activeConv = &m.sidebar.conversations[insertIdx]
 		m.chat.messages = nil
+		m.chat.selectedMsg = -1
 		m.chat.err = ""
 		m.chat.refreshViewport()
-		m.toggleFocus()
+		m.showUsagePreview = false
+		m.focus = focusChat
+		m.sidebar.focused = false
+		m.chat.focused = true
+		m.chat.inputFocused = true
+		m.chat.input.Focus()
+		m.chat.resizeInput()
+		return m, nil
+
+	case modelChangedMsg:
+		p, model := msg.provider, msg.model
+		for _, prov := range m.providers {
+			if prov.Name() == p {
+				prov.SetModel(model)
+				m.active = prov
+				break
+			}
+		}
+		m.statusbar.provider = p
+		m.statusbar.model = model
+		m.chat.activeModel = model
+		m.store.SaveConfig(store.Config{Provider: p, Model: model, Skills: m.skills})
+		m.focusToSidebar()
+		return m, nil
+
+	case skillSelectedMsg:
+		// Find the conversation with this skill mode and select it
+		for i, c := range m.sidebar.conversations {
+			if c.Mode == msg.skill.Mode {
+				m.sidebar.selected = i
+				return m.Update(selectConvInputMsg(i))
+			}
+		}
+		return m, nil
+
+	case selectUsageMsg:
+		m.syncActiveConv()
+		m.activeConv = nil
+		m.usage.info = m.active.GetRateLimit()
+		m.usage.providerName = m.active.Name()
+		m.usage.model = m.active.GetModel()
+		m.usage.loading = true
+		m.usage.err = ""
+		m.focus = focusUsage
+		m.sidebar.focused = false
+		m.chat.focused = false
+		m.chat.inputFocused = false
+		m.chat.input.Blur()
+		m.statusbar.activity = netFetchingUsage
+		m.statusbar.spinnerFrame = 0
+		g := m.active
+		return m, tea.Batch(
+			func() tea.Msg {
+				info, err := g.FetchUsage()
+				return usageResultMsg{info: info, err: err}
+			},
+			spinnerTick(),
+		)
+
+	case usageResultMsg:
+		m.usage.loading = false
+		m.usage.info = msg.info
+		m.statusbar.activity = netIdle
+		if msg.err != nil {
+			m.usage.err = msg.err.Error()
+		}
 		return m, nil
 
 	case deleteConvMsg:
@@ -123,15 +533,139 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case deleteMsgMsg:
+		idx := int(msg)
+		if m.activeConv != nil && idx >= 0 && idx < len(m.activeConv.Messages) {
+			m.activeConv.Messages = append(m.activeConv.Messages[:idx], m.activeConv.Messages[idx+1:]...)
+			m.chat.messages = m.activeConv.Messages
+			if m.chat.selectedMsg >= len(m.chat.messages) {
+				m.chat.selectedMsg = len(m.chat.messages) - 1
+			}
+			m.chat.refreshViewport()
+			m.store.Save(*m.activeConv)
+		}
+		return m, nil
+
 	case sendMsg:
 		if m.activeConv == nil {
 			return m, nil
 		}
+		m.store.SaveHistory(m.chat.inputHistory)
+
+		// If currently streaming, finalize the in-progress assistant message
+		if m.chat.streaming {
+			m.chat.streaming = false
+			m.chat.streamCh = nil
+			if m.activeConv != nil {
+				m.activeConv.Messages = m.chat.messages
+				m.store.Save(*m.activeConv)
+			}
+		}
+
+		skillMode := m.activeConv.Mode
+		isSkill := m.isFixedMode(skillMode)
+
+		// If a skill chat already has messages, archive it and create a fresh one
+		if isSkill && len(m.activeConv.Messages) > 0 {
+			// Auto-title the old conversation from its first user message
+			isSkillTitle := false
+			for _, s := range m.skills {
+				if m.activeConv.Title == s.Title {
+					isSkillTitle = true
+					break
+				}
+			}
+			if isSkillTitle {
+				for _, mm := range m.activeConv.Messages {
+					if mm.Role == "user" {
+						title := mm.Content
+						if len(title) > 30 {
+							title = title[:30] + "..."
+						}
+						m.activeConv.Title = title
+						break
+					}
+				}
+			}
+			archivedID := m.activeConv.ID
+			m.activeConv.Mode = ""
+			for i := range m.sidebar.conversations {
+				if m.sidebar.conversations[i].ID == archivedID {
+					m.sidebar.conversations[i].Title = m.activeConv.Title
+					m.sidebar.conversations[i].Mode = ""
+					break
+				}
+			}
+			m.store.Save(*m.activeConv)
+
+			// Create a fresh skill conversation
+			var newSkill store.Skill
+			for _, s := range m.skills {
+				if s.Mode == skillMode {
+					newSkill = s
+					break
+				}
+			}
+			tc := conversation.New(newSkill.Title)
+			tc.Mode = skillMode
+			m.store.Save(tc)
+
+			// Remove archived from its fixed position, insert new skill, then
+			// place archived after all fixed items to keep ordering clean.
+			newConvs := make([]conversation.Conversation, 0, len(m.sidebar.conversations))
+			var archived conversation.Conversation
+			for _, c := range m.sidebar.conversations {
+				if c.ID == archivedID {
+					archived = c
+				} else {
+					newConvs = append(newConvs, c)
+				}
+			}
+
+			// Find correct insertion index based on config order
+			insertIdx := 0
+			for i, s := range m.skills {
+				if s.Mode == skillMode {
+					insertIdx = i
+					break
+				}
+			}
+
+			newConvs = append(newConvs[:insertIdx],
+				append([]conversation.Conversation{tc}, newConvs[insertIdx:]...)...)
+			afterFixed := m.fixedAfterIdx(newConvs)
+			newConvs = append(newConvs[:afterFixed],
+				append([]conversation.Conversation{archived}, newConvs[afterFixed:]...)...)
+			m.sidebar.conversations = newConvs
+			m.sidebar.selected = insertIdx
+			m.activeConv = &m.sidebar.conversations[insertIdx]
+			m.chat.messages = nil
+			m.chat.selectedMsg = -1
+			m.chat.err = ""
+			m.showUsagePreview = false
+		}
+
+		// If non-skill chat already has messages, spawn a new conversation
+		if !isSkill && len(m.activeConv.Messages) > 0 {
+			m.syncActiveConv()
+			conv := conversation.New("[new chat]")
+			m.store.Save(conv)
+			insertIdx := m.fixedAfterIdx(m.sidebar.conversations)
+			m.sidebar.conversations = append(m.sidebar.conversations[:insertIdx],
+				append([]conversation.Conversation{conv}, m.sidebar.conversations[insertIdx:]...)...)
+			m.sidebar.selected = insertIdx
+			m.activeConv = &m.sidebar.conversations[insertIdx]
+			m.chat.messages = nil
+			m.chat.selectedMsg = -1
+			m.chat.err = ""
+			m.showUsagePreview = false
+		}
+
 		userMsg := conversation.Message{Role: "user", Content: string(msg)}
 		m.activeConv.Messages = append(m.activeConv.Messages, userMsg)
 
 		// Auto-title from first message
-		if len(m.activeConv.Messages) == 1 && m.activeConv.Title == "New Chat" {
+		if len(m.activeConv.Messages) == 1 && m.activeConv.Title == "[new chat]" {
 			title := string(msg)
 			if len(title) > 30 {
 				title = title[:30] + "..."
@@ -145,22 +679,69 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		assistantMsg := conversation.Message{Role: "assistant", Content: ""}
+		assistantMsg := conversation.Message{Role: "assistant", Content: "", Model: m.active.GetModel()}
 		m.activeConv.Messages = append(m.activeConv.Messages, assistantMsg)
 
 		m.chat.messages = m.activeConv.Messages
+		m.chat.streaming = true // set before refresh so "thinking..." shows immediately
 		m.chat.refreshViewport()
 		m.chat.viewport.GotoBottom()
 
-		// Start streaming (send only messages up to the user message, not the empty assistant one)
-		ch := m.groq.StreamChat(m.activeConv.Messages[:len(m.activeConv.Messages)-1])
-		m.chat.streamCh = ch
-		m.chat.streaming = true
+		// Build messages to send to the LLM (exclude reasoning messages)
+		var chatMsgs []conversation.Message
+		if isSkill {
+			var skill store.Skill
+			for _, s := range m.skills {
+				if s.Mode == skillMode {
+					skill = s
+					break
+				}
+			}
 
-		return m, waitForStream(ch)
+			tmpl, err := template.New("prompt").Parse(skill.Prompt)
+			if err == nil {
+				var buf bytes.Buffer
+				err = tmpl.Execute(&buf, struct{ Input string }{Input: string(msg)})
+				if err == nil {
+					chatMsgs = []conversation.Message{{Role: "user", Content: buf.String()}}
+				}
+			}
+
+			if chatMsgs == nil {
+				// Fallback if template fails
+				chatMsgs = []conversation.Message{{Role: "user", Content: string(msg)}}
+			}
+		} else {
+			for _, m := range m.activeConv.Messages[:len(m.activeConv.Messages)-1] {
+				if !m.Reasoning {
+					chatMsgs = append(chatMsgs, m)
+				}
+			}
+		}
+
+		ch := m.active.StreamChat(chatMsgs)
+		m.chat.streamCh = ch
+		m.chat.err = ""
+		m.statusbar.activity = netSending
+		m.statusbar.tokenCount = 0
+		m.statusbar.spinnerFrame = 0
+		m.statusbar.lastError = ""
+
+		return m, tea.Batch(waitForStream(ch), spinnerTick())
+
+	case reasoningTokenMsg:
+		m.statusbar.activity = netStreaming
+		m.statusbar.tokenCount++
+		var cmd tea.Cmd
+		m.chat, cmd = m.chat.Update(msg)
+		if m.activeConv != nil {
+			m.activeConv.Messages = m.chat.messages
+		}
+		return m, cmd
 
 	case tokenMsg:
-		// Let chat.Update() handle token appending; just forward to it
+		m.statusbar.activity = netStreaming
+		m.statusbar.tokenCount++
 		var cmd tea.Cmd
 		m.chat, cmd = m.chat.Update(msg)
 		if m.activeConv != nil {
@@ -170,14 +751,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamDoneMsg:
 		m.chat, _ = m.chat.Update(msg)
+		m.statusbar.activity = netIdle
 		if m.activeConv != nil {
 			m.activeConv.Messages = m.chat.messages
 			m.store.Save(*m.activeConv)
+		}
+		// Focus on the assistant's response
+		if len(m.chat.messages) > 0 {
+			m.chat.selectedMsg = len(m.chat.messages) - 1
+			m.chat.inputFocused = false
+			m.chat.input.Blur()
+			m.chat.refreshViewport()
+			m.chat.viewport.GotoBottom()
 		}
 		return m, nil
 
 	case streamErrMsg:
 		m.chat, _ = m.chat.Update(msg)
+		m.statusbar.activity = netError
+		m.statusbar.lastError = msg.err.Error()
 		if m.activeConv != nil {
 			m.activeConv.Messages = m.chat.messages
 			m.store.Save(*m.activeConv)
@@ -186,6 +778,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	if m.focus == focusPager {
+		m.pager, cmd = m.pager.Update(msg)
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
+	}
+	if m.focus == focusModelPicker {
+		m.modelPicker, cmd = m.modelPicker.Update(msg)
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
+	}
+	if m.focus == focusSkillPicker {
+		m.skillPicker, cmd = m.skillPicker.Update(msg)
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
+	}
+
 	m.sidebar, cmd = m.sidebar.Update(msg)
 	cmds = append(cmds, cmd)
 
@@ -199,26 +807,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) toggleFocus() {
-	if m.focus == focusSidebar {
-		m.focus = focusChat
-		m.sidebar.focused = false
-		m.chat.focused = true
-		m.chat.input.Focus()
-	} else {
-		m.focus = focusSidebar
-		m.sidebar.focused = true
-		m.chat.focused = false
-		m.chat.input.Blur()
+// syncActiveConv saves the current active conversation's messages back to the
+// sidebar slice and persists to disk. Call before switching to a different conversation.
+func (m *Model) syncActiveConv() {
+	if m.activeConv == nil {
+		return
 	}
+	if m.chat.messages == nil {
+		return // messages never loaded, nothing to save
+	}
+	m.activeConv.Messages = m.chat.messages
+	m.store.Save(*m.activeConv)
+}
+
+// loadConvMessages lazily loads a conversation's messages from disk if not already loaded.
+func (m *Model) loadConvMessages(idx int) {
+	conv := &m.sidebar.conversations[idx]
+	if conv.Messages != nil {
+		return // already loaded
+	}
+	full, err := m.store.Load(conv.ID)
+	if err != nil {
+		conv.Messages = []conversation.Message{}
+		return
+	}
+	conv.Messages = full.Messages
+}
+
+func (m *Model) focusToChat() {
+	m.focus = focusChat
+	m.sidebar.focused = false
+	m.chat.focused = true
+	m.chat.inputFocused = false
+	m.chat.input.Blur()
+}
+
+func (m *Model) focusToSidebar() {
+	m.focus = focusSidebar
+	m.sidebar.focused = true
+	m.chat.focused = false
+	m.chat.inputFocused = false
+	m.chat.input.Blur()
 }
 
 func (m *Model) updateSizes() {
-	chatWidth := m.width - sidebarWidth - 4
-	chatHeight := m.height - 2
+	rightWidth := m.width - sidebarWidth - 4
+	rightHeight := m.height - 3 // reserve 1 row for status bar
 	m.sidebar.width = sidebarWidth
-	m.sidebar.height = m.height
-	m.chat.setSize(chatWidth, chatHeight)
+	m.sidebar.height = m.height - 1
+	m.statusbar.width = m.width
+	m.chat.setSize(rightWidth, rightHeight)
+	m.usage.setSize(rightWidth, rightHeight)
+	m.modelPicker.setSize(rightWidth, rightHeight)
+	m.skillPicker.setSize(rightWidth, rightHeight)
+	m.pager.setSize(rightWidth-2, rightHeight)
 }
 
 func (m Model) View() string {
@@ -235,15 +877,28 @@ func (m Model) View() string {
 		chStyle = focusedBorder.Padding(0, 1)
 	}
 
+	panelHeight := m.height - 3
+
 	sidebarView := sbStyle.
 		Width(sidebarWidth).
-		Height(m.height - 2).
+		Height(panelHeight).
 		Render(m.sidebar.View())
 
-	chatView := chStyle.
-		Width(m.width - sidebarWidth - 4).
-		Height(m.height - 2).
-		Render(m.chat.View())
+	rightWidth := m.width - sidebarWidth - 4
+	var rightView string
+	switch {
+	case m.focus == focusUsage, m.focus == focusSidebar && m.showUsagePreview:
+		rightView = chStyle.Width(rightWidth).Height(panelHeight).Render(m.usage.View())
+	case m.focus == focusModelPicker:
+		rightView = chStyle.Width(rightWidth).Height(panelHeight).Render(m.modelPicker.View())
+	case m.focus == focusSkillPicker:
+		rightView = chStyle.Width(rightWidth).Height(panelHeight).Render(m.skillPicker.View())
+	case m.focus == focusPager:
+		rightView = chStyle.Width(rightWidth).Height(panelHeight).Render(m.pager.View())
+	default:
+		rightView = chStyle.Width(rightWidth).Height(panelHeight).Render(m.chat.View())
+	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, chatView)
+	top := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, rightView)
+	return lipgloss.JoinVertical(lipgloss.Left, top, m.statusbar.View())
 }

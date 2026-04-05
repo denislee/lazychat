@@ -8,8 +8,10 @@ import (
 )
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Model     string `json:"model,omitempty"`
+	Reasoning bool   `json:"reasoning,omitempty"`
 }
 
 type Conversation struct {
@@ -17,6 +19,7 @@ type Conversation struct {
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
 	Messages  []Message `json:"messages"`
+	Mode      string    `json:"mode,omitempty"`
 }
 
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9-]`)
