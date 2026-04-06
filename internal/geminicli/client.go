@@ -3,13 +3,14 @@ package geminicli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
 
-	"lazychat/conversation"
-	"lazychat/provider"
+	"lazychat/internal/conversation"
+	"lazychat/internal/provider"
 )
 
 var Models = []string{
@@ -40,13 +41,13 @@ func Available() bool {
 	return err == nil
 }
 
-func (c *Client) Name() string              { return "gemini-cli" }
-func (c *Client) AvailableModels() []string  { return Models }
-func (c *Client) GetModel() string           { return c.model }
-func (c *Client) SetModel(m string)          { c.model = m }
+func (c *Client) Name() string                         { return "gemini-cli" }
+func (c *Client) AvailableModels() []string            { return Models }
+func (c *Client) GetModel() string                     { return c.model }
+func (c *Client) SetModel(m string)                    { c.model = m }
 func (c *Client) GetRateLimit() provider.RateLimitInfo { return provider.RateLimitInfo{} }
 
-func (c *Client) FetchUsage() (provider.RateLimitInfo, error) {
+func (c *Client) FetchUsage(ctx context.Context) (provider.RateLimitInfo, error) {
 	return provider.RateLimitInfo{}, fmt.Errorf("usage info not available for gemini CLI")
 }
 
@@ -77,7 +78,7 @@ func formatPrompt(messages []conversation.Message) string {
 	return b.String()
 }
 
-func (c *Client) StreamChat(messages []conversation.Message) <-chan provider.StreamEvent {
+func (c *Client) StreamChat(ctx context.Context, messages []conversation.Message) <-chan provider.StreamEvent {
 	ch := make(chan provider.StreamEvent)
 	go func() {
 		defer close(ch)
@@ -89,7 +90,7 @@ func (c *Client) StreamChat(messages []conversation.Message) <-chan provider.Str
 			args = append(args, "-m", c.model)
 		}
 
-		cmd := exec.Command("gemini", args...)
+		cmd := exec.CommandContext(ctx, "gemini", args...)
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			ch <- provider.StreamEvent{Err: fmt.Errorf("gemini CLI: %w", err)}

@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"lazychat/store"
+	"lazychat/internal/store"
 )
 
 type skillSelectedMsg struct {

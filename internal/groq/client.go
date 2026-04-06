@@ -4,14 +4,15 @@ package groq
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
-	"lazychat/conversation"
-	"lazychat/provider"
+	"lazychat/internal/conversation"
+	"lazychat/internal/provider"
 )
 
 const apiURL = "https://api.groq.com/openai/v1/chat/completions"
@@ -30,7 +31,7 @@ var Models = []string{
 
 // reasoningModels lists models that support reasoning_format: "parsed".
 var reasoningModels = map[string]bool{
-	"qwen/qwen3-32b":     true,
+	"qwen/qwen3-32b":      true,
 	"openai/gpt-oss-120b": true,
 	"openai/gpt-oss-20b":  true,
 }
@@ -50,10 +51,10 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
-func (c *Client) Name() string              { return "groq" }
-func (c *Client) AvailableModels() []string  { return Models }
-func (c *Client) GetModel() string           { return c.model }
-func (c *Client) SetModel(m string)          { c.model = m }
+func (c *Client) Name() string                         { return "groq" }
+func (c *Client) AvailableModels() []string            { return Models }
+func (c *Client) GetModel() string                     { return c.model }
+func (c *Client) SetModel(m string)                    { c.model = m }
 func (c *Client) GetRateLimit() provider.RateLimitInfo { return c.rateLimit }
 
 type chatRequest struct {
@@ -129,7 +130,7 @@ func (c *Client) extractRateLimit(resp *http.Response) {
 }
 
 // FetchUsage makes a minimal request to refresh rate limit info from response headers.
-func (c *Client) FetchUsage() (provider.RateLimitInfo, error) {
+func (c *Client) FetchUsage(ctx context.Context) (provider.RateLimitInfo, error) {
 	reqBody := chatRequest{
 		Model: c.model,
 		Messages: []conversation.Message{
@@ -143,7 +144,7 @@ func (c *Client) FetchUsage() (provider.RateLimitInfo, error) {
 		return c.rateLimit, err
 	}
 
-	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(body))
 	if err != nil {
 		return c.rateLimit, err
 	}
@@ -290,7 +291,7 @@ func wrapCompound(in <-chan provider.StreamEvent) <-chan provider.StreamEvent {
 }
 
 // StreamChat sends messages to Groq and returns a channel of streaming events.
-func (c *Client) StreamChat(messages []conversation.Message) <-chan provider.StreamEvent {
+func (c *Client) StreamChat(ctx context.Context, messages []conversation.Message) <-chan provider.StreamEvent {
 	ch := make(chan provider.StreamEvent)
 	go func() {
 		defer close(ch)
@@ -309,7 +310,7 @@ func (c *Client) StreamChat(messages []conversation.Message) <-chan provider.Str
 			return
 		}
 
-		req, err := http.NewRequest("POST", apiURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(body))
 		if err != nil {
 			ch <- provider.StreamEvent{Err: err}
 			return

@@ -4,13 +4,14 @@ package gemini
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"lazychat/conversation"
-	"lazychat/provider"
+	"lazychat/internal/conversation"
+	"lazychat/internal/provider"
 )
 
 const apiURL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
@@ -43,10 +44,10 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
-func (c *Client) Name() string              { return "gemini" }
-func (c *Client) AvailableModels() []string  { return Models }
-func (c *Client) GetModel() string           { return c.model }
-func (c *Client) SetModel(m string)          { c.model = m }
+func (c *Client) Name() string                         { return "gemini" }
+func (c *Client) AvailableModels() []string            { return Models }
+func (c *Client) GetModel() string                     { return c.model }
+func (c *Client) SetModel(m string)                    { c.model = m }
 func (c *Client) GetRateLimit() provider.RateLimitInfo { return c.rateLimit }
 
 type chatRequest struct {
@@ -93,7 +94,7 @@ func (c *Client) extractRateLimit(resp *http.Response) {
 	}
 }
 
-func (c *Client) FetchUsage() (provider.RateLimitInfo, error) {
+func (c *Client) FetchUsage(ctx context.Context) (provider.RateLimitInfo, error) {
 	reqBody := chatRequest{
 		Model: c.model,
 		Messages: []conversation.Message{
@@ -107,7 +108,7 @@ func (c *Client) FetchUsage() (provider.RateLimitInfo, error) {
 		return c.rateLimit, err
 	}
 
-	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(body))
 	if err != nil {
 		return c.rateLimit, err
 	}
@@ -129,7 +130,7 @@ func (c *Client) FetchUsage() (provider.RateLimitInfo, error) {
 	return c.rateLimit, nil
 }
 
-func (c *Client) StreamChat(messages []conversation.Message) <-chan provider.StreamEvent {
+func (c *Client) StreamChat(ctx context.Context, messages []conversation.Message) <-chan provider.StreamEvent {
 	ch := make(chan provider.StreamEvent)
 	go func() {
 		defer close(ch)
@@ -145,7 +146,7 @@ func (c *Client) StreamChat(messages []conversation.Message) <-chan provider.Str
 			return
 		}
 
-		req, err := http.NewRequest("POST", apiURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(body))
 		if err != nil {
 			ch <- provider.StreamEvent{Err: err}
 			return

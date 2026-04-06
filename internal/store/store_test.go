@@ -2,10 +2,11 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"testing"
 
-	"lazychat/conversation"
+	"lazychat/internal/conversation"
 )
 
 func testStore(t *testing.T) *Store {
@@ -74,7 +75,7 @@ func TestDelete(t *testing.T) {
 	}
 
 	_, err := s.Load(conv.ID)
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("expected file not found error, got: %v", err)
 	}
 }

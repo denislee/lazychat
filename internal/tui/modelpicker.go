@@ -8,7 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"lazychat/provider"
+	"lazychat/internal/provider"
 )
 
 type modelChangedMsg struct {

@@ -3,6 +3,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"text/template"
 	"time"
 
@@ -10,9 +11,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"lazychat/conversation"
-	"lazychat/provider"
-	"lazychat/store"
+	"lazychat/internal/conversation"
+	"lazychat/internal/provider"
+	"lazychat/internal/store"
 )
 
 const sidebarWidth = 25
@@ -54,6 +55,7 @@ type Model struct {
 	ready            bool
 	resizeSeq        int
 	skills           []store.Skill
+	reqCancel        context.CancelFunc
 }
 
 func (m Model) isFixedMode(mode string) bool {
@@ -198,6 +200,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			if m.statusbar.activity == netStreaming || m.statusbar.activity == netSending || m.statusbar.activity == netFetchingUsage {
+				if m.reqCancel != nil {
+					m.reqCancel()
+					m.reqCancel = nil
+				}
+				m.statusbar.activity = netIdle
+				return m, nil
+			}
 			return m, tea.Quit
 		case "esc":
 			if m.focus == focusModelPicker || m.focus == focusSkillPicker || m.focus == focusUsage {
@@ -255,9 +265,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusbar.activity = netFetchingUsage
 				m.statusbar.spinnerFrame = 0
 				g := m.active
+				ctx, cancel := context.WithCancel(context.Background())
+				m.reqCancel = cancel
 				return m, tea.Batch(
 					func() tea.Msg {
-						info, err := g.FetchUsage()
+						info, err := g.FetchUsage(ctx)
 						return usageResultMsg{info: info, err: err}
 					},
 					spinnerTick(),
@@ -493,9 +505,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusbar.activity = netFetchingUsage
 		m.statusbar.spinnerFrame = 0
 		g := m.active
+		ctx, cancel := context.WithCancel(context.Background())
+		m.reqCancel = cancel
 		return m, tea.Batch(
 			func() tea.Msg {
-				info, err := g.FetchUsage()
+				info, err := g.FetchUsage(ctx)
 				return usageResultMsg{info: info, err: err}
 			},
 			spinnerTick(),
@@ -717,7 +731,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		ch := m.active.StreamChat(chatMsgs)
+		ctx, cancel := context.WithCancel(context.Background())
+		m.reqCancel = cancel
+		ch := m.active.StreamChat(ctx, chatMsgs)
 		m.chat.streamCh = ch
 		m.chat.err = ""
 		m.statusbar.activity = netSending

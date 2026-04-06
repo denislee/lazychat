@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"lazychat/conversation"
-	"lazychat/store"
+	"lazychat/internal/conversation"
+	"lazychat/internal/store"
 )
 
 type selectConvMsg int

@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
-	"lazychat/conversation"
-	"lazychat/provider"
+	"lazychat/internal/conversation"
+	"lazychat/internal/provider"
 )
 
 type clipboardMsg struct{ err error }
@@ -31,21 +31,21 @@ type sendMsg string
 const maxInputHeight = 10
 
 type chat struct {
-	viewport     viewport.Model
-	input        textarea.Model
-	messages     []conversation.Message
-	streaming    bool
-	streamCh     <-chan provider.StreamEvent
-	focused      bool
-	inputFocused bool
-	selectedMsg    int
-	confirmDelete  bool
-	spinnerFrame   int
-	activeModel    string
-	mdRenderer     *glamour.TermRenderer
-	width          int
-	height         int
-	err            string
+	viewport      viewport.Model
+	input         textarea.Model
+	messages      []conversation.Message
+	streaming     bool
+	streamCh      <-chan provider.StreamEvent
+	focused       bool
+	inputFocused  bool
+	selectedMsg   int
+	confirmDelete bool
+	spinnerFrame  int
+	activeModel   string
+	mdRenderer    *glamour.TermRenderer
+	width         int
+	height        int
+	err           string
 
 	// Input history
 	inputHistory []string // previously sent messages
@@ -462,7 +462,7 @@ func (c *chat) ensureVisible() {
 
 	// Height of the selected message
 	line := c.formatMsgLine(c.messages[c.selectedMsg])
-	rendered := lipgloss.NewStyle().Width(w-3).PaddingLeft(1).
+	rendered := lipgloss.NewStyle().Width(w - 3).PaddingLeft(1).
 		BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).
 		BorderForeground(lipgloss.Color("170")).Render(line)
 	msgHeight := strings.Count(rendered, "\n") + 1

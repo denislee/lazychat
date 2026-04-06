@@ -7,17 +7,17 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"lazychat/provider"
+	"lazychat/internal/provider"
 )
 
 type usageView struct {
 	info         provider.RateLimitInfo
 	providerName string
 	model        string
-	loading bool
-	err     string
-	width   int
-	height  int
+	loading      bool
+	err          string
+	width        int
+	height       int
 }
 
 func newUsageView() usageView {

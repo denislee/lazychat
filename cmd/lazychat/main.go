@@ -7,12 +7,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"lazychat/gemini"
-	"lazychat/geminicli"
-	"lazychat/groq"
-	"lazychat/provider"
-	"lazychat/store"
-	"lazychat/tui"
+	"lazychat/internal/gemini"
+	"lazychat/internal/geminicli"
+	"lazychat/internal/groq"
+	"lazychat/internal/provider"
+	"lazychat/internal/store"
+	"lazychat/internal/tui"
 )
 
 func main() {

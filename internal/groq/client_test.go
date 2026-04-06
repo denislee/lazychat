@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"lazychat/provider"
+	"lazychat/internal/provider"
 )
 
 func TestParseSSELine(t *testing.T) {

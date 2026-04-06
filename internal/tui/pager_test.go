@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"lazychat/conversation"
+	"lazychat/internal/conversation"
 )
 
 func TestPagerOpenAndView(t *testing.T) {

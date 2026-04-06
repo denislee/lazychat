@@ -35,7 +35,7 @@ func newPager() pager {
 	ti.Width = 30
 
 	return pager{
-		selectFrom: -1,
+		selectFrom:  -1,
 		searchInput: ti,
 	}
 }
@@ -280,7 +280,6 @@ func (p *pager) findPrev(query string) {
 	}
 }
 
-
 func (p *pager) viewHeight() int {
 	// Reserve 1 line for the status bar at the bottom
 	h := p.height - 1
@@ -470,4 +469,3 @@ func highlightMatches(line string, query string, style lipgloss.Style) string {
 	}
 	return b.String()
 }
-

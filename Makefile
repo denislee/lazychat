@@ -3,7 +3,7 @@ BINARY = lazychat
 .PHONY: build run clean
 
 build:
-	go build -o $(BINARY) .
+	go build -o $(BINARY) ./cmd/lazychat
 
 run: build
 	./$(BINARY)

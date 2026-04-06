@@ -3,13 +3,14 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"lazychat/conversation"
+	"lazychat/internal/conversation"
 )
 
 type Store struct {
@@ -18,27 +19,36 @@ type Store struct {
 
 func New(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create store directory: %w", err)
 	}
 	return &Store{dir: dir}, nil
 }
 
 func (s *Store) Save(conv conversation.Conversation) error {
-	data, err := json.MarshalIndent(conv, "", "  ")
+	file, err := os.OpenFile(filepath.Join(s.dir, conv.ID+".json"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file for saving: %w", err)
 	}
-	return os.WriteFile(filepath.Join(s.dir, conv.ID+".json"), data, 0644)
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(conv); err != nil {
+		return fmt.Errorf("failed to encode conversation: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Load(id string) (conversation.Conversation, error) {
-	data, err := os.ReadFile(filepath.Join(s.dir, id+".json"))
+	file, err := os.Open(filepath.Join(s.dir, id+".json"))
 	if err != nil {
-		return conversation.Conversation{}, err
+		return conversation.Conversation{}, fmt.Errorf("failed to open conversation file: %w", err)
 	}
+	defer file.Close()
+
 	var conv conversation.Conversation
-	if err := json.Unmarshal(data, &conv); err != nil {
-		return conversation.Conversation{}, err
+	if err := json.NewDecoder(file).Decode(&conv); err != nil {
+		return conversation.Conversation{}, fmt.Errorf("failed to decode conversation: %w", err)
 	}
 	return conv, nil
 }
@@ -83,14 +93,16 @@ func (s *Store) ListMeta() ([]conversation.Conversation, error) {
 		if filepath.Ext(e.Name()) != ".json" || e.Name() == "config.json" || e.Name() == "history.json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(s.dir, e.Name()))
+		file, err := os.Open(filepath.Join(s.dir, e.Name()))
 		if err != nil {
 			continue
 		}
 		var m meta
-		if err := json.Unmarshal(data, &m); err != nil {
+		if err := json.NewDecoder(file).Decode(&m); err != nil {
+			file.Close()
 			continue
 		}
+		file.Close()
 		convs = append(convs, conversation.Conversation{
 			ID:        m.ID,
 			Title:     m.Title,
@@ -122,24 +134,33 @@ type Config struct {
 }
 
 func (s *Store) SaveConfig(cfg Config) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	file, err := os.OpenFile(filepath.Join(s.dir, "config.json"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open config file for saving: %w", err)
 	}
-	return os.WriteFile(filepath.Join(s.dir, "config.json"), data, 0644)
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(cfg); err != nil {
+		return fmt.Errorf("failed to encode config: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) LoadConfig() (Config, error) {
-	data, err := os.ReadFile(filepath.Join(s.dir, "config.json"))
+	file, err := os.Open(filepath.Join(s.dir, "config.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Config{}, nil
 		}
-		return Config{}, err
+		return Config{}, fmt.Errorf("failed to open config file: %w", err)
 	}
+	defer file.Close()
+
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return Config{}, err
+	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
+		return Config{}, fmt.Errorf("failed to decode config: %w", err)
 	}
 	return cfg, nil
 }
@@ -150,20 +171,27 @@ func (s *Store) SaveHistory(entries []string) error {
 	if len(entries) > maxHistoryEntries {
 		entries = entries[len(entries)-maxHistoryEntries:]
 	}
-	data, err := json.Marshal(entries)
+	file, err := os.OpenFile(filepath.Join(s.dir, "history.json"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open history file for saving: %w", err)
 	}
-	return os.WriteFile(filepath.Join(s.dir, "history.json"), data, 0644)
+	defer file.Close()
+
+	if err := json.NewEncoder(file).Encode(entries); err != nil {
+		return fmt.Errorf("failed to encode history: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) LoadHistory() []string {
-	data, err := os.ReadFile(filepath.Join(s.dir, "history.json"))
+	file, err := os.Open(filepath.Join(s.dir, "history.json"))
 	if err != nil {
 		return nil
 	}
+	defer file.Close()
+
 	var entries []string
-	if err := json.Unmarshal(data, &entries); err != nil {
+	if err := json.NewDecoder(file).Decode(&entries); err != nil {
 		return nil
 	}
 	return entries

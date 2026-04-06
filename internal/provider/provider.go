@@ -1,7 +1,10 @@
 // provider/provider.go
 package provider
 
-import "lazychat/conversation"
+import (
+	"context"
+	"lazychat/internal/conversation"
+)
 
 // StreamEvent represents a single event from a streaming response.
 type StreamEvent struct {
@@ -28,6 +31,6 @@ type Provider interface {
 	GetModel() string
 	SetModel(model string)
 	GetRateLimit() RateLimitInfo
-	FetchUsage() (RateLimitInfo, error)
-	StreamChat(messages []conversation.Message) <-chan StreamEvent
+	FetchUsage(ctx context.Context) (RateLimitInfo, error)
+	StreamChat(ctx context.Context, messages []conversation.Message) <-chan StreamEvent
 }
