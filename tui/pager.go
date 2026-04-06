@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -20,10 +21,23 @@ type pager struct {
 	width      int
 	height     int
 	active     bool
+
+	searching   bool
+	searchInput textinput.Model
+	lastSearch  string
 }
 
 func newPager() pager {
-	return pager{selectFrom: -1}
+	ti := textinput.New()
+	ti.Placeholder = "Search..."
+	ti.Prompt = "/"
+	ti.CharLimit = 156
+	ti.Width = 30
+
+	return pager{
+		selectFrom: -1,
+		searchInput: ti,
+	}
 }
 
 // wrapLine splits a long line at word boundaries to fit within width.
@@ -88,19 +102,67 @@ func (p *pager) close() {
 func (p *pager) setSize(w, h int) {
 	p.width = w
 	p.height = h
+	p.searchInput.Width = w - 2
 }
 
-func (p pager) Update(msg tea.Msg) (pager, tea.Cmd) {
+func (p *pager) Update(msg tea.Msg) (pager, tea.Cmd) {
 	if !p.active {
-		return p, nil
+		return *p, nil
+	}
+
+	if p.searching {
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			switch msg.String() {
+			case "enter":
+				query := p.searchInput.Value()
+				p.lastSearch = query
+				p.searching = false
+				if query != "" {
+					p.findNext(query, true)
+				}
+				return *p, nil
+			case "esc":
+				p.searching = false
+				return *p, nil
+			}
+		}
+
+		var cmd tea.Cmd
+		p.searchInput, cmd = p.searchInput.Update(msg)
+		return *p, cmd
 	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "esc", "h":
+		case "q", "h":
 			p.close()
-			return p, func() tea.Msg { return pagerCloseMsg{} }
+			return *p, func() tea.Msg { return pagerCloseMsg{} }
+
+		case "esc":
+			if p.lastSearch != "" {
+				p.lastSearch = ""
+				return *p, nil
+			}
+			p.close()
+			return *p, func() tea.Msg { return pagerCloseMsg{} }
+
+		case "/":
+			p.searching = true
+			p.searchInput.Focus()
+			p.searchInput.SetValue("")
+			return *p, nil
+
+		case "n":
+			if p.lastSearch != "" {
+				p.findNext(p.lastSearch, true)
+			}
+
+		case "N":
+			if p.lastSearch != "" {
+				p.findPrev(p.lastSearch)
+			}
 
 		case "j", "down":
 			if p.cursor < len(p.lines)-1 {
@@ -163,7 +225,7 @@ func (p pager) Update(msg tea.Msg) (pager, tea.Cmd) {
 
 		case "y":
 			text := p.selectedText()
-			return p, func() tea.Msg {
+			return *p, func() tea.Msg {
 				cmd := exec.Command("wl-copy")
 				cmd.Stdin = strings.NewReader(text)
 				err := cmd.Run()
@@ -172,8 +234,52 @@ func (p pager) Update(msg tea.Msg) (pager, tea.Cmd) {
 		}
 	}
 
-	return p, nil
+	return *p, nil
 }
+
+func (p *pager) findNext(query string, fromCurrent bool) {
+	if len(p.lines) == 0 {
+		return
+	}
+	start := p.cursor
+	if fromCurrent {
+		start = p.cursor + 1
+	}
+	query = strings.ToLower(query)
+
+	for i := 0; i < len(p.lines); i++ {
+		idx := (start + i) % len(p.lines)
+		if strings.Contains(strings.ToLower(p.lines[idx]), query) {
+			p.cursor = idx
+			p.ensureVisible()
+			break
+		}
+	}
+}
+
+func (p *pager) findPrev(query string) {
+	if len(p.lines) == 0 {
+		return
+	}
+	start := p.cursor - 1
+	if start < 0 {
+		start = len(p.lines) - 1
+	}
+	query = strings.ToLower(query)
+
+	for i := 0; i < len(p.lines); i++ {
+		idx := (start - i)
+		if idx < 0 {
+			idx += len(p.lines)
+		}
+		if strings.Contains(strings.ToLower(p.lines[idx]), query) {
+			p.cursor = idx
+			p.ensureVisible()
+			break
+		}
+	}
+}
+
 
 func (p *pager) viewHeight() int {
 	// Reserve 1 line for the status bar at the bottom
@@ -226,6 +332,7 @@ func (p pager) View() string {
 	selectStyle := lipgloss.NewStyle().Background(lipgloss.Color("237"))
 	cursorLineNumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Bold(true)
 	selectLineNumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	matchStyle := lipgloss.NewStyle().Background(lipgloss.Color("214")).Foreground(lipgloss.Color("232"))
 
 	maxContent := p.width - gutterWidth - 2 // gutter + space + border space
 	if maxContent < 1 {
@@ -240,6 +347,11 @@ func (p pager) View() string {
 		}
 	}
 
+	searchQuery := p.lastSearch
+	if p.searching && p.searchInput.Value() != "" {
+		searchQuery = p.searchInput.Value()
+	}
+
 	var b strings.Builder
 	end := p.scroll + vh
 	if end > len(p.lines) {
@@ -248,6 +360,9 @@ func (p pager) View() string {
 
 	for i := p.scroll; i < end; i++ {
 		line := p.lines[i]
+		if searchQuery != "" {
+			line = highlightMatches(line, searchQuery, matchStyle)
+		}
 
 		isCursor := i == p.cursor
 		isSelected := lo != -1 && i >= lo && i <= hi
@@ -288,6 +403,13 @@ func (p pager) View() string {
 		Background(lipgloss.Color("236")).
 		Foreground(lipgloss.Color("252")).
 		Width(p.width)
+
+	if p.searching {
+		b.WriteString("\n")
+		b.WriteString(statusStyle.Render(p.searchInput.View()))
+		return b.String()
+	}
+
 	modeStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("236")).
 		Foreground(lipgloss.Color("170")).
@@ -301,7 +423,7 @@ func (p pager) View() string {
 	}
 
 	pos := fmt.Sprintf(" %d/%d ", p.cursor+1, len(p.lines))
-	help := " [j/k]move [v]isual [y]ank [h/q]back "
+	help := " [j/k]move [v]isual [y]ank [/]search [n/N]next/prev [h/q]back "
 
 	left := modeStyle.Render(mode)
 	right := lipgloss.NewStyle().
@@ -325,3 +447,27 @@ func (p pager) View() string {
 
 	return b.String()
 }
+
+func highlightMatches(line string, query string, style lipgloss.Style) string {
+	if query == "" {
+		return line
+	}
+	lowerLine := strings.ToLower(line)
+	lowerQuery := strings.ToLower(query)
+
+	var b strings.Builder
+	lastIdx := 0
+	for {
+		idx := strings.Index(lowerLine[lastIdx:], lowerQuery)
+		if idx == -1 {
+			b.WriteString(line[lastIdx:])
+			break
+		}
+		idx += lastIdx
+		b.WriteString(line[lastIdx:idx])
+		b.WriteString(style.Render(line[idx : idx+len(query)]))
+		lastIdx = idx + len(query)
+	}
+	return b.String()
+}
+

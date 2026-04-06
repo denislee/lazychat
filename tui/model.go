@@ -527,6 +527,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.sidebar.selected >= len(m.sidebar.conversations) && m.sidebar.selected > 0 {
 				m.sidebar.selected--
 			}
+			m.sidebar.ensureVisible()
 		}
 		return m, nil
 
@@ -851,7 +852,8 @@ func (m *Model) updateSizes() {
 	rightWidth := m.width - sidebarWidth - 4
 	rightHeight := m.height - 3 // reserve 1 row for status bar
 	m.sidebar.width = sidebarWidth
-	m.sidebar.height = m.height - 1
+	m.sidebar.height = rightHeight // must match panelHeight used in View
+	m.sidebar.ensureVisible()
 	m.statusbar.width = m.width
 	m.chat.setSize(rightWidth, rightHeight)
 	m.usage.setSize(rightWidth, rightHeight)

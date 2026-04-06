@@ -26,6 +26,7 @@ type sidebar struct {
 	confirmDelete bool
 	width         int
 	height        int
+	scroll        int // first visible conversation index
 	skills        []store.Skill
 }
 
@@ -40,6 +41,40 @@ func (s sidebar) isFixedMode(mode string) bool {
 		}
 	}
 	return false
+}
+
+// maxVisible returns the number of conversation items that fit in the sidebar.
+// Overhead: header(2) + footer(4: blank + Usage + 2 help lines) + padding(2) = 8.
+func (s sidebar) maxVisible() int {
+	n := s.height - 8
+	if s.confirmDelete {
+		n-- // delete confirmation takes an extra line
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+func (s *sidebar) ensureVisible() {
+	maxVis := s.maxVisible()
+	convSelected := s.selected
+	if convSelected >= len(s.conversations) {
+		// Usage item — show last conversations
+		convSelected = len(s.conversations) - 1
+	}
+	if convSelected < 0 {
+		return
+	}
+	if convSelected < s.scroll {
+		s.scroll = convSelected
+	}
+	if convSelected >= s.scroll+maxVis {
+		s.scroll = convSelected - maxVis + 1
+	}
+	if s.scroll < 0 {
+		s.scroll = 0
+	}
 }
 
 func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
@@ -64,6 +99,7 @@ func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 		case "up", "k", "ctrl+p":
 			if s.selected > 0 {
 				s.selected--
+				s.ensureVisible()
 				if s.selected < len(s.conversations) {
 					idx := s.selected
 					return s, func() tea.Msg { return previewConvMsg(idx) }
@@ -74,6 +110,7 @@ func (s sidebar) Update(msg tea.Msg) (sidebar, tea.Cmd) {
 		case "down", "j", "ctrl+n":
 			if s.selected < maxIdx {
 				s.selected++
+				s.ensureVisible()
 				if s.selected < len(s.conversations) {
 					idx := s.selected
 					return s, func() tea.Msg { return previewConvMsg(idx) }
@@ -114,7 +151,14 @@ func (s sidebar) View() string {
 		b.WriteString("\n")
 		b.WriteString(dimStyle.Render("Press '^k' to start"))
 	} else {
-		for i, conv := range s.conversations {
+		maxVis := s.maxVisible()
+		end := s.scroll + maxVis
+		if end > len(s.conversations) {
+			end = len(s.conversations)
+		}
+
+		for i := s.scroll; i < end; i++ {
+			conv := s.conversations[i]
 			cursor := "  "
 			style := normalItemStyle
 			if i == s.selected {
@@ -151,7 +195,9 @@ func (s sidebar) View() string {
 	b.WriteString(style.Render(cursor + "Usage"))
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("[d]el [m]odel [^k]mode [q]uit"))
+	b.WriteString(dimStyle.Render("[d]el [m]odel [^k]mode"))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("[q]uit"))
 
 	return b.String()
 }
