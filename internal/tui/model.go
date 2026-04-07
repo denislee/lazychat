@@ -245,6 +245,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focusToSidebar()
 				return m, nil
 			}
+		case "ctrl+o":
+			if m.focus == focusModelPicker {
+				m.focusToSidebar()
+				return m, nil
+			}
+			m.focus = focusModelPicker
+			m.sidebar.focused = false
+			m.chat.focused = false
+			m.chat.inputFocused = false
+			m.chat.input.Blur()
+			return m, nil
 		case "m":
 			if m.focus == focusModelPicker {
 				m.focusToSidebar()

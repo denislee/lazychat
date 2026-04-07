@@ -195,7 +195,7 @@ func (s sidebar) View() string {
 	b.WriteString(style.Render(cursor + "Usage"))
 
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("[d]el [m]odel [^k]mode"))
+	b.WriteString(dimStyle.Render("[d]el [m/^o]odel [^k]mode"))
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render("[q]uit"))
 

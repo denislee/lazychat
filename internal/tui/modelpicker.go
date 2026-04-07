@@ -163,7 +163,7 @@ func (p modelPicker) View() string {
 		Render(p.current.provider + "/" + p.current.model))
 
 	b.WriteString("\n\n")
-	b.WriteString(dimStyle.Render("[enter]select [m]back"))
+	b.WriteString(dimStyle.Render("[enter]select [m/^o]back"))
 
 	return b.String()
 }
